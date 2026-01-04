@@ -3,6 +3,9 @@ extends Node2D
 var points: Array = []
 var triangles: Array = []
 
+var edges: Array = []
+var mst_edges: Array = []
+
 var rng := RandomNumberGenerator.new()
 
 func randf_range(a: float, b: float) -> float:
@@ -140,6 +143,89 @@ func delaunay_triangulation(points: Array) -> Array:
 
 	return result
 
+func make_edge_key(u: int, v: int) -> String:
+	if u > v:
+		var tmp = u
+		u = v
+		v = tmp
+	return str(u) + "_" + str(v)
+
+func extract_clean_edges(points: Array, triangles: Array) -> Array:
+	var edge_count := {}
+	for t in triangles:
+		var i1 = points.find(t[0])
+		var i2 = points.find(t[1])
+		var i3 = points.find(t[2])
+
+		var k1 = make_edge_key(i1, i2)
+		var k2 = make_edge_key(i2, i3)
+		var k3 = make_edge_key(i3, i1)
+
+		edge_count[k1] = edge_count.get(k1, 0) + 1
+		edge_count[k2] = edge_count.get(k2, 0) + 1
+		edge_count[k3] = edge_count.get(k3, 0) + 1
+
+	var edges: Array = []
+
+	for key in edge_count.keys():
+		if edge_count[key] == 2:
+			var parts = key.split("_")
+			var u = int(parts[0])
+			var v = int(parts[1])
+			var wt = points[u].distance_to(points[v])
+			edges.append([u, v, wt])
+
+	return edges
+
+func make_set(n: int) -> Dictionary:
+	var parent := []
+	var rank := []
+	for i in range(n):
+		parent.append(i)
+		rank.append(0)
+	return { "parent": parent, "rank": rank }
+
+func dsu_find(parent: Array, node: int) -> int:
+	if parent[node] == node:
+		return node
+	parent[node] = dsu_find(parent, parent[node])
+	return parent[node]
+
+func union_set(u: int, v: int, parent: Array, rank: Array) -> void:
+	u = dsu_find(parent, u)
+	v = dsu_find(parent, v)
+
+	if rank[u] < rank[v]:
+		parent[u] = v
+	elif rank[u] > rank[v]:
+		parent[v] = u
+	else:
+		parent[v] = u
+		rank[u] += 1
+
+func kruskal_mst(edges: Array, n: int) -> Array:
+	edges.sort_custom(func(a, b): return a[2] < b[2])
+
+	var dsu = make_set(n)
+	var parent = dsu["parent"]
+	var rank = dsu["rank"]
+
+	var mst: Array = []
+
+	for e in edges:
+		var u = e[0]
+		var v = e[1]
+		var w = e[2]
+
+		var pu = dsu_find(parent, u)
+		var pv = dsu_find(parent, v)
+
+		if pu != pv:
+			mst.append(e)
+			union_set(pu, pv, parent, rank)
+
+	return mst
+
 # =========================
 # GODOT CALLBACKS
 # =========================
@@ -149,16 +235,14 @@ func _ready():
 
 	points = poisson_biased(1200, 800, 30.0, 30, 12345, 2)
 	triangles = delaunay_triangulation(points)
+	edges = extract_clean_edges(points, triangles)
+	mst_edges = kruskal_mst(edges, points.size())
 
 	queue_redraw()
 
 func _draw():
-	# Draw points
 	for p in points:
 		draw_circle(p, 2.5, Color.WHITE)
 
-	# Draw triangle edges
-	for t in triangles:
-		draw_line(t[0], t[1], Color.GRAY, 1.0)
-		draw_line(t[1], t[2], Color.GRAY, 1.0)
-		draw_line(t[2], t[0], Color.GRAY, 1.0)
+	for e in mst_edges:
+		draw_line(points[e[0]], points[e[1]], Color.WHITE, 2.5)
