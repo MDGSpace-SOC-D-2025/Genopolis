@@ -5,8 +5,48 @@ var triangles: Array = []
 
 var edges: Array = []
 var mst_edges: Array = []
+var secondary_edges: Array = []
+
+@export var city_width: int = 1200
+@export var city_height: int = 800
+@export var min_radius: int = 30
+@export var angleSpreadDeg: float = 2.0
+@export var poisson_max = 1.6
 
 var rng := RandomNumberGenerator.new()
+
+# all polygons within x:(0,1500) and y:(0,1500)
+var city_polygons := [
+	[Vector2(140, 180),Vector2(620, 60),Vector2(1180, 220),Vector2(1460, 520),
+	Vector2(1320, 980),Vector2(920, 1380),Vector2(360, 1240),Vector2(80, 620)],
+
+	[Vector2(300, 80),Vector2(900, 140),Vector2(1420, 380),Vector2(1380, 760),
+	Vector2(1100, 1220),Vector2(600, 1460),Vector2(180, 1020),Vector2(120, 360)],
+
+	[Vector2(60, 420),Vector2(420, 120),Vector2(980, 80),Vector2(1400, 340),
+	Vector2(1480, 780),Vector2(1040, 1400),Vector2(520, 1300),Vector2(120, 820)],
+
+	[Vector2(260, 60),Vector2(860, 100),Vector2(1320, 260),Vector2(1480, 620),
+	Vector2(1280, 1040),Vector2(740, 1380),Vector2(240, 1160),Vector2(120, 380)],
+
+	[Vector2(100, 260),Vector2(560, 80),Vector2(1040, 160),Vector2(1420, 480),
+	Vector2(1460, 920),Vector2(980, 1460),Vector2(420, 1340),Vector2(60, 720)],
+
+	[Vector2(220, 120),Vector2(740, 60),Vector2(1260, 200),Vector2(1400, 520),
+	Vector2(1300, 860),Vector2(980, 1250),Vector2(420, 1200),Vector2(100, 620)],
+
+	[Vector2(80, 520),Vector2(360, 160),Vector2(900, 100),Vector2(1380, 300),
+	Vector2(1500, 660),Vector2(1120, 1480),Vector2(520, 1400),Vector2(120, 860)],
+
+	[Vector2(320, 180),Vector2(1140, 260),Vector2(1480, 460),
+	Vector2(1420, 860),Vector2(1000, 1320),Vector2(460, 1280),Vector2(290, 1120), Vector2(120, 620)],
+
+	[Vector2(240, 160),Vector2(860, 100),Vector2(1360, 240),Vector2(1500, 560),
+	Vector2(1380, 980),Vector2(860, 1400),Vector2(320, 1320),Vector2(100, 760)],
+
+	[Vector2(320, 120),Vector2(740, 80),Vector2(1180, 180),Vector2(1460, 420),
+	Vector2(1500, 820),Vector2(1080, 1380),Vector2(480, 1360),Vector2(320, 1160),Vector2(160, 620)]
+]
 
 func randf_range(a: float, b: float) -> float:
 	return rng.randf_range(a, b)
@@ -31,22 +71,16 @@ func too_close(p: Vector2, points: Array, min_dist: float) -> bool:
 	return false
 
 func poisson_biased(
-	width: int,
-	height: int,
 	min_dist: float,
 	k: int,
-	seed: int,
 	angle_spread_deg: float
 ) -> Array:
 	
-	rng.seed = seed
 	var points: Array = []
 	var active: Array = []
 
-	var first = Vector2(
-		randf_range(0.0, width),
-		randf_range(0.0, height)
-	)
+	var polygon = city_polygons[randi_range(0,9)]
+	var first = Vector2(750, 750)
 
 	points.append(first)
 	active.append(first)
@@ -58,13 +92,11 @@ func poisson_biased(
 
 		for i in range(k):
 			var angle = sample_biased_angle(angle_spread_deg)
-			var radius = randf_range(min_dist, 2.0 * min_dist)
+			var radius = randf_range(min_dist, poisson_max * min_dist)
 
 			var candidate = center + Vector2(cos(angle), sin(angle)) * radius
 
-			if candidate.x < 0 or candidate.x >= width:
-				continue
-			if candidate.y < 0 or candidate.y >= height:
+			if not Geometry2D.is_point_in_polygon(candidate, polygon):
 				continue
 
 			if not too_close(candidate, points, min_dist):
@@ -226,17 +258,56 @@ func kruskal_mst(edges: Array, n: int) -> Array:
 
 	return mst
 
-# =========================
-# GODOT CALLBACKS
-# =========================
+# calculate average length of MST edges.
+func mst_average_weight(mst_edges: Array) -> float:
+	var sum := 0.0
+	for e in mst_edges:
+		sum += e[2]
+	return sum / mst_edges.size()
+
+func extract_secondary_edges(mst_edges: Array, edges: Array, points: Array) -> Array:
+	
+	var avg := mst_average_weight(mst_edges)
+	var secondary_edges: Array = []
+
+	for e in edges:
+		var u: Vector2 = points[e[0]]
+		var v: Vector2 = points[e[1]]
+
+		if u.distance_to(v) < 1.6 * avg:
+			secondary_edges.append(e)
+
+	return secondary_edges
+
+func extract_secondary_directional(mst_edges: Array, edges: Array, points: Array) -> Array:
+
+	var base_secondary := extract_secondary_edges(mst_edges, edges, points)
+	var result: Array = []
+	var angle_threshold := deg_to_rad(25.0)
+
+	for e in base_secondary:
+		var u: Vector2 = points[e[0]]
+		var v: Vector2 = points[e[1]]
+
+		var dx = abs(v.x - u.x)
+		var dy = abs(v.y - u.y)
+
+		var angle = atan2(dy, dx)
+
+		if angle < angle_threshold or abs(angle - PI / 2.0) < angle_threshold:
+			result.append(e)
+
+	return result
+
 
 func _ready():
 	print("CityGenerator is running")
 
-	points = poisson_biased(1200, 800, 30.0, 30, 12345, 2)
+	points = poisson_biased(min_radius, 30, angleSpreadDeg)
 	triangles = delaunay_triangulation(points)
 	edges = extract_clean_edges(points, triangles)
 	mst_edges = kruskal_mst(edges, points.size())
+	secondary_edges = extract_secondary_directional(mst_edges, edges, points)
 
 	queue_redraw()
 
@@ -244,5 +315,22 @@ func _draw():
 	for p in points:
 		draw_circle(p, 2.5, Color.WHITE)
 
-	for e in mst_edges:
-		draw_line(points[e[0]], points[e[1]], Color.WHITE, 2.5)
+	if(show_roads):
+		for e in secondary_edges:
+			draw_line(points[e[0]], points[e[1]], Color.GRAY, 1)
+		for e in mst_edges:
+			draw_line(points[e[0]], points[e[1]], Color.WHITE, 3)
+
+func _on_regenerate_button_pressed():
+	points = poisson_biased( min_radius, 30, angleSpreadDeg)
+	triangles = delaunay_triangulation(points)
+	edges = extract_clean_edges(points, triangles)
+	mst_edges = kruskal_mst(edges, points.size())
+	secondary_edges = extract_secondary_directional(mst_edges, edges, points)
+	queue_redraw()
+
+var show_roads := true
+
+func _on_toggle_button_pressed():
+	show_roads = !show_roads
+	queue_redraw()
